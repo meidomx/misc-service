@@ -20,6 +20,29 @@ const (
 
 type ItemId [2]int64
 
+var hexTable = []byte{
+	'0', '1', '2', '3',
+	'4', '5', '6', '7',
+	'8', '9', 'A', 'B',
+	'C', 'D', 'E', 'F',
+}
+
+func Int64Hex(i int64) string {
+	c := 0xF
+
+	tmp := i
+	result := make([]byte, 0, 16)
+	for shift := 60; shift >= 0; shift -= 4 {
+		result = append(result, hexTable[c&int(tmp>>shift)])
+	}
+
+	return string(result)
+}
+
+func (this ItemId) HexString() string {
+	return Int64Hex(this[0]) + Int64Hex(this[1])
+}
+
 func (this ItemId) CompareTo(id2 ItemId) int {
 	if this[0] > id2[0] {
 		return 1

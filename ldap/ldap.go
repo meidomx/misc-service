@@ -2,6 +2,7 @@ package ldap
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -30,6 +31,12 @@ func StartService(idgen *id.IdGen) {
 	if err != nil {
 		log.Fatalf("unable to create router: %s", err.Error())
 	}
+	if err := r.Add(server.Add, gldap.WithLabel("Add")); err != nil {
+		log.Fatalf("add op error: %s", err.Error())
+	}
+	if err := r.Delete(server.Delete, gldap.WithLabel("Delete")); err != nil {
+		log.Fatalf("del op error: %s", err.Error())
+	}
 	if err := r.Bind(server.bindHandler); err != nil {
 		log.Fatalf("bind op error: %s", err.Error())
 	}
@@ -49,6 +56,62 @@ func StartService(idgen *id.IdGen) {
 		log.Printf("\nstopping directory")
 		s.Stop()
 	}
+}
+
+/**
+    mux.Bind(d.handleBind(t))
+	mux.ExtendedOperation(d.handleStartTLS(t), gldap.ExtendedOperationStartTLS)
+	mux.Search(d.handleSearchUsers(t), gldap.WithBaseDN(d.userDN), gldap.WithLabel("Search - Users"))
+	mux.Search(d.handleSearchGroups(t), gldap.WithBaseDN(d.groupDN), gldap.WithLabel("Search - Groups"))
+	mux.Search(d.handleSearchGeneric(t), gldap.WithLabel("Search - Generic"))
+	mux.Modify(d.handleModify(t), gldap.WithLabel("Modify"))
+	mux.Delete(d.handleDelete(t), gldap.WithLabel("Delete"))
+    mux.Unbind
+*/
+func (this *ldapServer) Delete(w *gldap.ResponseWriter, r *gldap.Request) {
+
+}
+
+func (this *ldapServer) Add(w *gldap.ResponseWriter, r *gldap.Request) {
+	const op = "ldap.(Directory).handleAdd"
+	log.Println("operation:", op)
+
+	res := r.NewResponse(gldap.WithApplicationCode(gldap.ApplicationAddResponse), gldap.WithResponseCode(gldap.ResultOperationsError))
+	defer w.Write(res)
+	m, err := r.GetAddMessage()
+	if err != nil {
+		log.Println("not an add message: %s", "op", op, "err", err)
+		return
+	}
+	log.Println("add request", "dn", m.DN)
+
+	entry, err := FindEntry(m.DN)
+	if err != nil {
+		log.Println("FindEntry error: %s", "op", op, "err", err)
+		return
+	}
+	if len(entry.DN) > 0 {
+		res.SetResultCode(gldap.ResultEntryAlreadyExists)
+		res.SetDiagnosticMessage(fmt.Sprintf("entry exists for DN: %s", m.DN))
+		return
+	}
+
+	attrs := map[string][]string{}
+	for _, a := range m.Attributes {
+		attrs[a.Type] = a.Vals
+	}
+	newEntry := gldap.NewEntry(m.DN, attrs)
+	id, err := this.IdGen.Next()
+	if err != nil {
+		log.Println("generate id error: %s", "op", op, "err", err)
+		return
+	}
+	err = SaveEntry(newEntry, id)
+	if err != nil {
+		log.Println("SaveEntry error: %s", "op", op, "err", err)
+		return
+	}
+	res.SetResultCode(gldap.ResultSuccess)
 }
 
 func (this *ldapServer) bindHandler(w *gldap.ResponseWriter, r *gldap.Request) {
