@@ -27,7 +27,7 @@ func main() {
 		panic(err)
 	}
 
-	ldap.StartService(idgen)
+	ldap.StartService(idgen, "dc=auth,dc=moetang,dc=com")
 }
 
 func loadConfig(c *tConfig) {

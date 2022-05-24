@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 
 	"github.com/meidomx/misc-service/id"
 
@@ -15,9 +14,11 @@ import (
 
 type ldapServer struct {
 	IdGen *id.IdGen
+
+	BindBaseDN string
 }
 
-func StartService(idgen *id.IdGen) {
+func StartService(idgen *id.IdGen, bindBaseDn string) {
 	s, err := gldap.NewServer()
 	if err != nil {
 		log.Fatalf("unable to create server: %s", err.Error())
@@ -25,6 +26,7 @@ func StartService(idgen *id.IdGen) {
 
 	server := new(ldapServer)
 	server.IdGen = idgen
+	server.BindBaseDN = bindBaseDn
 
 	// create a router and add a bind handler
 	r, err := gldap.NewMux()
@@ -37,11 +39,11 @@ func StartService(idgen *id.IdGen) {
 	if err := r.Delete(server.Delete, gldap.WithLabel("Delete")); err != nil {
 		log.Fatalf("del op error: %s", err.Error())
 	}
-	if err := r.Bind(server.bindHandler); err != nil {
-		log.Fatalf("bind op error: %s", err.Error())
-	}
-	if err := r.Search(server.searchHandler); err != nil {
+	if err := r.Search(server.Search, gldap.WithLabel("Search - Generic")); err != nil {
 		log.Fatalf("search op error: %s", err.Error())
+	}
+	if err := r.Bind(server.Bind); err != nil {
+		log.Fatalf("bind op error: %s", err.Error())
 	}
 	if err := s.Router(r); err != nil {
 		log.Fatalf("router error: %s", err.Error())
@@ -59,17 +61,184 @@ func StartService(idgen *id.IdGen) {
 }
 
 /**
-    mux.Bind(d.handleBind(t))
 	mux.ExtendedOperation(d.handleStartTLS(t), gldap.ExtendedOperationStartTLS)
-	mux.Search(d.handleSearchUsers(t), gldap.WithBaseDN(d.userDN), gldap.WithLabel("Search - Users"))
-	mux.Search(d.handleSearchGroups(t), gldap.WithBaseDN(d.groupDN), gldap.WithLabel("Search - Groups"))
-	mux.Search(d.handleSearchGeneric(t), gldap.WithLabel("Search - Generic"))
 	mux.Modify(d.handleModify(t), gldap.WithLabel("Modify"))
-	mux.Delete(d.handleDelete(t), gldap.WithLabel("Delete"))
     mux.Unbind
 */
-func (this *ldapServer) Delete(w *gldap.ResponseWriter, r *gldap.Request) {
+func (this *ldapServer) Bind(w *gldap.ResponseWriter, r *gldap.Request) {
+	const op = "ldap.(Directory).handleBind"
+	log.Println("operation:", op)
+	resp := r.NewBindResponse(gldap.WithResponseCode(gldap.ResultInvalidCredentials))
+	defer func() {
+		_ = w.Write(resp)
+	}()
 
+	m, err := r.GetSimpleBindMessage()
+	if err != nil {
+		log.Println("not a simple bind message", "op", op, "err", err)
+		return
+	}
+
+	log.Println("bind username:", m.UserName, "baseDN:", this.BindBaseDN)
+
+	if m.AuthChoice != gldap.SimpleAuthChoice {
+		// if it's not a simple auth request, then the bind failed...
+		//TODO need support more auth methods
+		return
+	}
+
+	// user + BaseDN
+	//TODO need optimize the query
+	entries, err := FindChildren(this.BindBaseDN)
+	if err != nil {
+		log.Println("find children error", "op", op, "err", err)
+		return
+	}
+	for _, v := range entries {
+		cns := v.GetAttributeValues("cn")
+		for _, cn := range cns {
+			if cn == m.UserName {
+				log.Println("found bind user", "op", op, "DN", v.DN)
+				values := v.GetAttributeValues("userPassword")
+				if len(values) > 0 && string(m.Password) == values[0] {
+					resp.SetResultCode(gldap.ResultSuccess)
+					return
+				}
+			}
+		}
+	}
+
+	// user is full DN
+	entry, err := FindOneEntry(m.UserName)
+	if err != nil {
+		log.Println("FindOneEntry error", "op", op, "err", err)
+		return
+	}
+	if len(entry.DN) > 0 {
+		values := entry.GetAttributeValues("userPassword")
+		if len(values) > 0 && string(m.Password) == values[0] {
+			resp.SetResultCode(gldap.ResultSuccess)
+			return
+		}
+	}
+
+}
+
+func (this *ldapServer) Search(w *gldap.ResponseWriter, r *gldap.Request) {
+	const op = "ldap.(Directory).handleSearchGeneric"
+	log.Println("operation:", op)
+
+	res := r.NewSearchDoneResponse(gldap.WithResponseCode(gldap.ResultNoSuchObject))
+	defer w.Write(res)
+	m, err := r.GetSearchMessage()
+	if err != nil {
+		log.Println("not a search message: %s", "op", op, "err", err)
+		return
+	}
+	logSearchRequest(m)
+
+	filter := m.Filter
+
+	switch m.Scope {
+	case gldap.BaseObject:
+		{
+			var entry *gldap.Entry
+			var err error
+			if len(m.BaseDN) > 0 {
+				entry, err = FindOneEntry(m.BaseDN)
+			} else {
+				entry, err = FindSingleRoot()
+			}
+			if err != nil {
+				log.Println("FindOneEntry error: %s", "op", op, "err", err)
+				return
+			}
+			if len(entry.DN) <= 0 {
+				return
+			} else {
+				//TODO filter entries
+				var _ = filter
+			}
+
+			res.SetResultCode(gldap.ResultSuccess)
+			result := r.NewSearchResponseEntry(entry.DN)
+			for _, attr := range entry.Attributes {
+				result.AddAttribute(attr.Name, attr.Values)
+			}
+			if err := w.Write(result); err != nil {
+				log.Println("write result error: %s", "op", op, "err", err)
+				return
+			}
+		}
+	case gldap.SingleLevel:
+		{
+			var entries []*gldap.Entry
+			var err error
+			if len(m.BaseDN) > 0 {
+				entries, err = FindChildren(m.BaseDN)
+			} else {
+				entries, err = FindAllRoots()
+			}
+			if err != nil {
+				log.Println("FindChildren error: %s", "op", op, "err", err)
+				return
+			}
+			if len(entries) <= 0 {
+				return
+			} else {
+				//TODO filter entries
+				var _ = filter
+			}
+			for _, e := range entries {
+				result := r.NewSearchResponseEntry(e.DN)
+				for _, attr := range e.Attributes {
+					result.AddAttribute(attr.Name, attr.Values)
+				}
+				if err := w.Write(result); err != nil {
+					log.Println("write result error: %s", "op", op, "err", err)
+					return
+				}
+			}
+			res.SetResultCode(gldap.ResultSuccess)
+		}
+	case gldap.WholeSubtree:
+		{
+
+			//TODO need support whole subtree
+		}
+	}
+}
+
+func (this *ldapServer) Delete(w *gldap.ResponseWriter, r *gldap.Request) {
+	const op = "ldap.(Directory).handleDelete"
+	log.Println("operation:", op)
+
+	res := r.NewResponse(gldap.WithResponseCode(gldap.ResultNoSuchObject), gldap.WithApplicationCode(gldap.ApplicationDelResponse))
+	defer w.Write(res)
+	m, err := r.GetDeleteMessage()
+	if err != nil {
+		log.Println("not a delete message: %s", "op", op, "err", err)
+		return
+	}
+	log.Println("delete request", "dn", m.DN)
+
+	entry, err := FindOneEntry(m.DN)
+	if err != nil {
+		log.Println("find entry error: %s", "op", op, "err", err)
+		res.SetResultCode(gldap.ResultOperationsError)
+		res.SetDiagnosticMessage(fmt.Sprintf("find entry error"))
+		return
+	}
+	if len(entry.DN) > 0 {
+		if err := DeleteEntry(m.DN); err != nil {
+			log.Println("delete entry error: %s", "op", op, "err", err)
+			res.SetResultCode(gldap.ResultOperationsError)
+			res.SetDiagnosticMessage(fmt.Sprintf("delete entry error"))
+			return
+		}
+	}
+
+	return
 }
 
 func (this *ldapServer) Add(w *gldap.ResponseWriter, r *gldap.Request) {
@@ -85,9 +254,9 @@ func (this *ldapServer) Add(w *gldap.ResponseWriter, r *gldap.Request) {
 	}
 	log.Println("add request", "dn", m.DN)
 
-	entry, err := FindEntry(m.DN)
+	entry, err := FindOneEntry(m.DN)
 	if err != nil {
-		log.Println("FindEntry error: %s", "op", op, "err", err)
+		log.Println("FindOneEntry error: %s", "op", op, "err", err)
 		return
 	}
 	if len(entry.DN) > 0 {
@@ -114,69 +283,11 @@ func (this *ldapServer) Add(w *gldap.ResponseWriter, r *gldap.Request) {
 	res.SetResultCode(gldap.ResultSuccess)
 }
 
-func (this *ldapServer) bindHandler(w *gldap.ResponseWriter, r *gldap.Request) {
-	resp := r.NewBindResponse(
-		gldap.WithResponseCode(gldap.ResultInvalidCredentials),
+func logSearchRequest(m *gldap.SearchMessage) {
+	log.Println("search request",
+		"baseDN", m.BaseDN,
+		"scope", m.Scope,
+		"filter", m.Filter,
+		"attributes", m.Attributes,
 	)
-	defer func() {
-		w.Write(resp)
-	}()
-
-	m, err := r.GetSimpleBindMessage()
-	if err != nil {
-		log.Printf("not a simple bind message: %s", err)
-		return
-	}
-
-	if m.UserName == "alice" {
-		resp.SetResultCode(gldap.ResultSuccess)
-		log.Println("bind success")
-		return
-	}
-}
-
-func (this *ldapServer) searchHandler(w *gldap.ResponseWriter, r *gldap.Request) {
-	resp := r.NewSearchDoneResponse()
-	defer func() {
-		w.Write(resp)
-	}()
-	m, err := r.GetSearchMessage()
-	if err != nil {
-		log.Printf("not a search message: %s", err)
-		return
-	}
-	log.Printf("search base dn: %s", m.BaseDN)
-	log.Printf("search scope: %d", m.Scope)
-	log.Printf("search filter: %s", m.Filter)
-
-	if strings.Contains(m.Filter, "uid=alice") || m.BaseDN == "uid=alice,ou=people,cn=example,dc=org" {
-		entry := r.NewSearchResponseEntry(
-			"uid=alice,ou=people,cn=example,dc=org",
-			gldap.WithAttributes(map[string][]string{
-				"objectclass": {"top", "person", "organizationalPerson", "inetOrgPerson"},
-				"uid":         {"alice"},
-				"cn":          {"alice eve smith"},
-				"givenname":   {"alice"},
-				"sn":          {"smith"},
-				"ou":          {"people"},
-				"description": {"friend of Rivest, Shamir and Adleman"},
-				"password":    {"{SSHA}U3waGJVC7MgXYc0YQe7xv7sSePuTP8zN"},
-			}),
-		)
-		entry.AddAttribute("email", []string{"alice@example.org"})
-		w.Write(entry)
-		resp.SetResultCode(gldap.ResultSuccess)
-	}
-	if m.BaseDN == "ou=people,cn=example,dc=org" {
-		entry := r.NewSearchResponseEntry(
-			"ou=people,cn=example,dc=org",
-			gldap.WithAttributes(map[string][]string{
-				"objectclass": {"organizationalUnit"},
-				"ou":          {"people"},
-			}),
-		)
-		w.Write(entry)
-		resp.SetResultCode(gldap.ResultSuccess)
-	}
-	return
 }
