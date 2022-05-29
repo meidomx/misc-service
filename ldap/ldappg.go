@@ -169,6 +169,27 @@ func SaveEntry(entry *gldap.Entry, i id.ItemId) error {
 	return err
 }
 
+func UpdateEntry(entry *gldap.Entry) error {
+	_, err := pgbackend.RunQuery(ServiceName, entry, func(conn *pgxpool.Conn, result *gldap.Entry) error {
+		sp := SplitDN(entry.DN)
+		entryType := EntryType(sp[0])
+		parent := CombineParentDN(sp)
+		now := time.Now().UnixMilli()
+		if len(parent) > 0 {
+			_, err := conn.Exec(context.Background(),
+				"update misc_ldap_entries set attribute = $1, time_updated = $2 where entry_name = $3 and parent_full_entry_path = $4 and entry_type = $5",
+				entry, now, sp[0], parent, entryType)
+			return err
+		} else {
+			_, err := conn.Exec(context.Background(),
+				"update misc_ldap_entries set attribute = $1, time_updated = $2 where entry_name = $3 and parent_full_entry_path IS NULL and entry_type = $4",
+				entry, now, sp[0], entryType)
+			return err
+		}
+	})
+	return err
+}
+
 func DeleteEntry(dn string) error {
 	_, err := pgbackend.RunQuery(ServiceName, nil, func(conn *pgxpool.Conn, result interface{}) error {
 		sp := SplitDN(dn)

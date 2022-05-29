@@ -2,6 +2,7 @@ package ldap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/meidomx/misc-service/id"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/jimlambrt/gldap"
 )
 
@@ -45,6 +47,12 @@ func StartService(idgen *id.IdGen, bindBaseDn string) {
 	if err := r.Bind(server.Bind); err != nil {
 		log.Fatalf("bind op error: %s", err.Error())
 	}
+	if err := r.Unbind(server.Unbind); err != nil {
+		log.Fatalf("bind op error: %s", err.Error())
+	}
+	if err := r.Modify(server.Modify, gldap.WithLabel("Modify")); err != nil {
+		log.Fatalf("bind op error: %s", err.Error())
+	}
 	if err := s.Router(r); err != nil {
 		log.Fatalf("router error: %s", err.Error())
 	}
@@ -60,11 +68,155 @@ func StartService(idgen *id.IdGen, bindBaseDn string) {
 	}
 }
 
-/**
-	mux.ExtendedOperation(d.handleStartTLS(t), gldap.ExtendedOperationStartTLS)
-	mux.Modify(d.handleModify(t), gldap.WithLabel("Modify"))
-    mux.Unbind
-*/
+func convertLDAPStringToNormal(ldapstrings []string) ([]string, error) {
+	n := make([]string, len(ldapstrings))
+	for i, v := range ldapstrings {
+		data := []byte(v)
+		// convert to normal
+		// see comments in github.com/go-asn1-ber/asn1-ber@v1.5.4/ber.go func -> readPacket(reader io.Reader) (*Packet, int, error)
+		if ber.Tag(data[0]) == ber.TagOctetString {
+			_, s, err := readLength(data[1:])
+			if err != nil {
+				return nil, err
+			}
+			n[i] = string(data[(1 + s):])
+		} else {
+			n[i] = v
+		}
+	}
+	return n, nil
+}
+
+// from github.com/go-asn1-ber/asn1-ber@v1.5.4/length.go
+func readLength(bytes []byte) (length int, read int, err error) {
+	// length byte
+	b := bytes[0]
+	read++
+
+	switch {
+	case b == 0xFF:
+		// Invalid 0xFF (x.600, 8.1.3.5.c)
+		return 0, read, errors.New("invalid length byte 0xff")
+
+	case b == ber.LengthLongFormBitmask:
+		// Indefinite form, we have to decode packets until we encounter an EOC packet (x.600, 8.1.3.6)
+		length = ber.LengthIndefinite
+
+	case b&ber.LengthLongFormBitmask == 0:
+		// Short definite form, extract the length from the bottom 7 bits (x.600, 8.1.3.4)
+		length = int(b) & ber.LengthValueBitmask
+
+	case b&ber.LengthLongFormBitmask != 0:
+		// Long definite form, extract the number of length bytes to follow from the bottom 7 bits (x.600, 8.1.3.5.b)
+		lengthBytes := int(b) & ber.LengthValueBitmask
+		// Protect against overflow
+		// TODO: support big int length?
+		if lengthBytes > 8 {
+			return 0, read, errors.New("long-form length overflow")
+		}
+
+		// Accumulate into a 64-bit variable
+		var length64 int64
+		for i := 0; i < lengthBytes; i++ {
+			b = bytes[read]
+			read++
+
+			// x.600, 8.1.3.5
+			length64 <<= 8
+			length64 |= int64(b)
+		}
+
+		// Cast to a platform-specific integer
+		length = int(length64)
+		// Ensure we didn't overflow
+		if int64(length) != length64 {
+			return 0, read, errors.New("long-form length overflow")
+		}
+
+	default:
+		return 0, read, errors.New("invalid length byte")
+	}
+
+	return length, read, nil
+}
+
+func (this *ldapServer) Modify(w *gldap.ResponseWriter, r *gldap.Request) {
+	const op = "ldap.(Directory).handleModify"
+	log.Println("operation:", op)
+
+	res := r.NewModifyResponse(gldap.WithResponseCode(gldap.ResultNoSuchObject))
+	defer w.Write(res)
+	m, err := r.GetModifyMessage()
+	if err != nil {
+		log.Println("not a modify message: %s", "op", op, "err", err)
+		return
+	}
+	log.Println("modify request", "dn", m.DN)
+
+	entry, err := FindOneEntry(m.DN)
+	if err != nil {
+		log.Println("FindOneEntry error", "op", op, "err", err)
+		return
+	}
+	if len(entry.DN) <= 0 {
+		log.Println("FindOneEntry empty", "op", op, "err", err)
+		return
+	}
+
+	if entry.Attributes == nil {
+		entry.Attributes = []*gldap.EntryAttribute{}
+	}
+	res.SetMatchedDN(entry.DN)
+	for _, chg := range m.Changes {
+		// find specific attr
+		var foundAttr *gldap.EntryAttribute
+		var foundAt int
+		for i, a := range entry.Attributes {
+			if a.Name == chg.Modification.Type {
+				foundAttr = a
+				foundAt = i
+			}
+		}
+
+		converted, err := convertLDAPStringToNormal(chg.Modification.Vals)
+		if err != nil {
+			log.Println("convertLDAPStringToNormal error", "op", op, "err", err)
+			return
+		}
+		// then apply operation
+		switch chg.Operation {
+		case gldap.AddAttribute:
+			if foundAttr != nil {
+				foundAttr.AddValue(converted...)
+			} else {
+				entry.Attributes = append(entry.Attributes, gldap.NewEntryAttribute(chg.Modification.Type, converted))
+			}
+		case gldap.DeleteAttribute:
+			if foundAttr != nil {
+				// slice out the deleted attribute
+				copy(entry.Attributes[foundAt:], entry.Attributes[foundAt+1:])
+				entry.Attributes = entry.Attributes[:len(entry.Attributes)-1]
+			}
+		case gldap.ReplaceAttribute:
+			if foundAttr != nil {
+				*foundAttr = *gldap.NewEntryAttribute(chg.Modification.Type, converted)
+			}
+		}
+	}
+
+	if err := UpdateEntry(entry); err != nil {
+		log.Println("UpdateEntry error", "op", op, "err", err)
+		return
+	}
+
+	res.SetResultCode(gldap.ResultSuccess)
+}
+
+func (this *ldapServer) Unbind(w *gldap.ResponseWriter, r *gldap.Request) {
+	const op = "ldap.(Directory).handleUnbind"
+	log.Println("operation:", op)
+}
+
 func (this *ldapServer) Bind(w *gldap.ResponseWriter, r *gldap.Request) {
 	const op = "ldap.(Directory).handleBind"
 	log.Println("operation:", op)
