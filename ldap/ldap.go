@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/meidomx/misc-service/config"
 	"github.com/meidomx/misc-service/id"
 
 	ber "github.com/go-asn1-ber/asn1-ber"

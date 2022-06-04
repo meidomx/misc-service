@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"os"
 
+	"github.com/meidomx/misc-service/config"
 	"github.com/meidomx/misc-service/id"
 	"github.com/meidomx/misc-service/ldap"
 	"github.com/meidomx/misc-service/pgbackend"
