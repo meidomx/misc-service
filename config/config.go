@@ -5,6 +5,10 @@ type Config struct {
 		ConnString string `toml:"conn_string"`
 	} `toml:"storage"`
 
+	Http struct {
+		Address string `toml:"address"`
+	} `toml:"http"`
+
 	LDAP struct {
 		Address    string `toml:"address"`
 		BindBaseDN string `toml:"bind_base_dn"`
@@ -28,4 +32,8 @@ type Config struct {
 			} `toml:"run_init_admin"`
 		} `toml:"init"`
 	} `toml:"ldap"`
+
+	FullTextSearch struct {
+		IndexFolder string `toml:"index_folder"`
+	} `toml:"full_text_search"`
 }

@@ -1,13 +1,10 @@
 package ldap
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
 
 	"github.com/meidomx/misc-service/config"
 	"github.com/meidomx/misc-service/id"
@@ -24,7 +21,7 @@ type ldapServer struct {
 	serverTlsConfig *tls.Config
 }
 
-func StartService(idGen *id.IdGen, c *config.Config) {
+func StartService(idGen *id.IdGen, c *config.Config, container *config.Container) {
 	s, err := gldap.NewServer()
 	if err != nil {
 		log.Fatalf("unable to create server: %s", err.Error())
@@ -96,14 +93,7 @@ func StartService(idGen *id.IdGen, c *config.Config) {
 		}()
 	}
 
-	// stop server gracefully when ctrl-c, sigint or sigterm occurs
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	select {
-	case <-ctx.Done():
-		log.Printf("\nstopping directory")
-		s.Stop()
-	}
+	container.GldapServer = s
 }
 
 func convertLDAPStringToNormal(ldapstrings []string) ([]string, error) {

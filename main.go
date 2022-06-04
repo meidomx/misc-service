@@ -1,28 +1,57 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
+	"os/signal"
 
 	"github.com/meidomx/misc-service/config"
+	"github.com/meidomx/misc-service/fulltextsearch"
 	"github.com/meidomx/misc-service/id"
 	"github.com/meidomx/misc-service/ldap"
 	"github.com/meidomx/misc-service/pgbackend"
 
 	"github.com/BurntSushi/toml"
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
 	c := new(config.Config)
 	loadConfig(c)
 
-	idgen := id.NewIdGen(1, 1)
+	idGen := id.NewIdGen(1, 1)
+	engine := gin.New()
+	{
+		engine.Use(gin.Logger())
+		engine.Use(gin.Recovery())
+	}
+	container := new(config.Container)
 
 	if err := pgbackend.InitDb(c.Storage.ConnString); err != nil {
 		panic(err)
 	}
 
-	ldap.StartService(idgen, c)
+	ldap.StartService(idGen, c, container)
+	fulltextsearch.InitService(c, engine, container)
+
+	go func() {
+		// stop server gracefully when ctrl-c, sigint or sigterm occurs
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		select {
+		case <-ctx.Done():
+			log.Printf("\nstopping services")
+			container.Stop()
+		}
+	}()
+
+	if err := engine.Run(c.Http.Address); err != nil {
+		panic(errors.New(fmt.Sprint("run gin failed:", err.Error())))
+	}
 }
 
 func loadConfig(c *config.Config) {
