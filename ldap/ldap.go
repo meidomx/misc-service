@@ -20,6 +20,8 @@ type ldapServer struct {
 	IdGen *id.IdGen
 
 	BindBaseDN string
+
+	serverTlsConfig *tls.Config
 }
 
 func StartService(idGen *id.IdGen, c *config.Config) {
@@ -58,21 +60,25 @@ func StartService(idGen *id.IdGen, c *config.Config) {
 	if err := r.Modify(server.Modify, gldap.WithLabel("Modify")); err != nil {
 		log.Fatalf("bind op error: %s", err.Error())
 	}
+	if c.LDAP.TLS.Enable {
+		if err := r.ExtendedOperation(server.ExtendedOperationStartTLS, gldap.ExtendedOperationStartTLS); err != nil {
+			log.Fatalf("bind ExtendedOperationStartTLS op error: %s", err.Error())
+		}
+	}
 	if err := s.Router(r); err != nil {
 		log.Fatalf("router error: %s", err.Error())
 	}
 
 	var connOpts []gldap.Option
-
 	if c.LDAP.TLS.Enable {
 		serverCert, err := tls.LoadX509KeyPair(c.LDAP.TLS.CertPath, c.LDAP.TLS.KeyPath)
 		if err != nil {
 			log.Fatalf("prepare server cert error: %s", err.Error())
 		}
-		serverTLSConfig := &tls.Config{
+		server.serverTlsConfig = &tls.Config{
 			Certificates: []tls.Certificate{serverCert},
 		}
-		connOpts = append(connOpts, gldap.WithTLSConfig(serverTLSConfig))
+		connOpts = append(connOpts, gldap.WithTLSConfig(server.serverTlsConfig))
 	}
 
 	go func() {

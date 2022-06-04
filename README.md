@@ -6,7 +6,7 @@ Misc services
 * [X] LDAP Server with Postgresql backend
   * [X] Add/Delete/Modify/Search/Bind/Unbind
   * [X] Initialize LDAP
-  * [X] TLS
+  * [X] TLS/StartTLS
 
 ## B. Dependent services
 
