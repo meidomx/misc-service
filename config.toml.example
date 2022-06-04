@@ -5,6 +5,12 @@ conn_string = "postgres://dev:dev@192.168.31.206:5432/dev?pool_max_conns=10&sslm
 bind_base_dn = "ou=Users,dc=moetang,dc=net"
 address = "0.0.0.0:10389"
 
+[ldap.tls]
+enable = true
+tls_address = "0.0.0.0:10636"
+cert_path = "example.ldap.crt"
+key_path = "example.ldap.key"
+
 [ldap.init]
 run_simple_init_scripts = [
     { dn = "dc=net", object_classes = ["top", "domain"] },
