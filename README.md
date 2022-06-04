@@ -3,8 +3,8 @@ Misc services
 
 ## A. Services included
 
-* [ ] LDAP Server
+* [X] LDAP Server with Postgresql backend
 
 ## B. Dependent services
 
-* [ ] Postgresql
+* [X] Postgresql

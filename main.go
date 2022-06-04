@@ -11,14 +11,8 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-type tConfig struct {
-	Storage struct {
-		ConnString string `toml:"conn_string"`
-	} `toml:"storage"`
-}
-
 func main() {
-	c := new(tConfig)
+	c := new(config.Config)
 	loadConfig(c)
 
 	idgen := id.NewIdGen(1, 1)
@@ -27,10 +21,10 @@ func main() {
 		panic(err)
 	}
 
-	ldap.StartService(idgen, "dc=auth,dc=moetang,dc=com")
+	ldap.StartService(idgen, c)
 }
 
-func loadConfig(c *tConfig) {
+func loadConfig(c *config.Config) {
 	f, err := os.Open("config.toml")
 	if err != nil {
 		panic(err)

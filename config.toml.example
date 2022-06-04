@@ -1,0 +1,17 @@
+[storage]
+conn_string = "postgres://dev:dev@192.168.31.206:5432/dev?pool_max_conns=10&sslmode=disable"
+
+[ldap]
+bind_base_dn = "ou=Users,dc=moetang,dc=net"
+address = "0.0.0.0:10389"
+
+[ldap.init]
+run_simple_init_scripts = [
+    { dn = "dc=net", object_classes = ["top", "domain"] },
+    { dn = "dc=moetang,dc=net", object_classes = ["top", "domain"] },
+    { dn = "ou=Users,dc=moetang,dc=net", object_classes = ["top", "organizationalUnit"] },
+]
+[ldap.init.run_init_admin]
+dn = "cn=admin,ou=Users,dc=moetang,dc=net"
+object_classes = ["top", "person", "inetOrgPerson"]
+user_password = "admin"

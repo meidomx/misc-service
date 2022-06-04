@@ -20,15 +20,18 @@ type ldapServer struct {
 	BindBaseDN string
 }
 
-func StartService(idgen *id.IdGen, bindBaseDn string) {
+func StartService(idGen *id.IdGen, c *config.Config) {
 	s, err := gldap.NewServer()
 	if err != nil {
 		log.Fatalf("unable to create server: %s", err.Error())
 	}
 
 	server := new(ldapServer)
-	server.IdGen = idgen
-	server.BindBaseDN = bindBaseDn
+	server.IdGen = idGen
+	server.BindBaseDN = c.LDAP.BindBaseDN
+	if err := InitBaseDN(c, idGen); err != nil {
+		log.Fatalf("unable to cinit base dn: %s", err.Error())
+	}
 
 	// create a router and add a bind handler
 	r, err := gldap.NewMux()
@@ -56,7 +59,7 @@ func StartService(idgen *id.IdGen, bindBaseDn string) {
 	if err := s.Router(r); err != nil {
 		log.Fatalf("router error: %s", err.Error())
 	}
-	go s.Run(":10389") // listen on port 10389
+	go s.Run(c.LDAP.Address)
 
 	// stop server gracefully when ctrl-c, sigint or sigterm occurs
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -240,28 +243,24 @@ func (this *ldapServer) Bind(w *gldap.ResponseWriter, r *gldap.Request) {
 	}
 
 	// user + BaseDN
+	userDN := fmt.Sprint("cn=", m.UserName, ",", this.BindBaseDN)
 	//TODO need optimize the query
-	entries, err := FindChildren(this.BindBaseDN)
+	entry, err := FindOneEntry(userDN)
 	if err != nil {
 		log.Println("find children error", "op", op, "err", err)
 		return
 	}
-	for _, v := range entries {
-		cns := v.GetAttributeValues("cn")
-		for _, cn := range cns {
-			if cn == m.UserName {
-				log.Println("found bind user", "op", op, "DN", v.DN)
-				values := v.GetAttributeValues("userPassword")
-				if len(values) > 0 && string(m.Password) == values[0] {
-					resp.SetResultCode(gldap.ResultSuccess)
-					return
-				}
-			}
+	if len(entry.DN) > 0 {
+		log.Println("found bind user", "op", op, "DN", userDN)
+		values := entry.GetAttributeValues("userPassword")
+		if len(values) > 0 && string(m.Password) == values[0] {
+			resp.SetResultCode(gldap.ResultSuccess)
+			return
 		}
 	}
 
 	// user is full DN
-	entry, err := FindOneEntry(m.UserName)
+	entry, err = FindOneEntry(m.UserName)
 	if err != nil {
 		log.Println("FindOneEntry error", "op", op, "err", err)
 		return
