@@ -2,6 +2,7 @@ package ldap
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -60,7 +61,34 @@ func StartService(idGen *id.IdGen, c *config.Config) {
 	if err := s.Router(r); err != nil {
 		log.Fatalf("router error: %s", err.Error())
 	}
-	go s.Run(c.LDAP.Address)
+
+	var connOpts []gldap.Option
+
+	if c.LDAP.TLS.Enable {
+		serverCert, err := tls.LoadX509KeyPair(c.LDAP.TLS.CertPath, c.LDAP.TLS.KeyPath)
+		if err != nil {
+			log.Fatalf("prepare server cert error: %s", err.Error())
+		}
+		serverTLSConfig := &tls.Config{
+			Certificates: []tls.Certificate{serverCert},
+		}
+		connOpts = append(connOpts, gldap.WithTLSConfig(serverTLSConfig))
+	}
+
+	go func() {
+		fmt.Println("start ldap on:", c.LDAP.Address)
+		if err := s.Run(c.LDAP.Address); err != nil {
+			log.Fatalf("run ldap error: %s", err.Error())
+		}
+	}()
+	if c.LDAP.TLS.Enable {
+		go func() {
+			fmt.Println("start tls ldap on:", c.LDAP.TLS.TLSAddress)
+			if err := s.Run(c.LDAP.TLS.TLSAddress, connOpts...); err != nil {
+				log.Fatalf("run tls ldap error: %s", err.Error())
+			}
+		}()
+	}
 
 	// stop server gracefully when ctrl-c, sigint or sigterm occurs
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

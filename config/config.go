@@ -9,6 +9,13 @@ type Config struct {
 		Address    string `toml:"address"`
 		BindBaseDN string `toml:"bind_base_dn"`
 
+		TLS struct {
+			Enable     bool   `toml:"enable"`
+			TLSAddress string `toml:"tls_address"`
+			CertPath   string `toml:"cert_path"`
+			KeyPath    string `toml:"key_path"`
+		} `toml:"tls"`
+
 		Init struct {
 			InitScripts []struct {
 				DN            string   `toml:"dn"`
