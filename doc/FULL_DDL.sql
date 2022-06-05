@@ -37,3 +37,15 @@ create unique index if not exists misc_ldap_uniqueness_uk
 
 CREATE INDEX misc_ldap_uniqueness_meta ON misc_ldap_uniqueness USING gin (metadata);
 
+------------------------------------------------------------------------
+-- Small Object tables
+------------------------------------------------------------------------
+
+create table misc_small_object
+(
+    obj_id       varchar(200) not null
+        constraint misc_small_object_pk
+            primary key,
+    metadata     varchar(4000),
+    file_content bytea
+);

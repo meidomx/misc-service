@@ -14,6 +14,7 @@ import (
 	"github.com/meidomx/misc-service/id"
 	"github.com/meidomx/misc-service/ldap"
 	"github.com/meidomx/misc-service/pgbackend"
+	"github.com/meidomx/misc-service/smallobj"
 
 	"github.com/BurntSushi/toml"
 	"github.com/gin-gonic/gin"
@@ -37,6 +38,7 @@ func main() {
 
 	ldap.StartService(idGen, c, container)
 	fulltextsearch.InitService(c, engine, container)
+	smallobj.InitSmallObj(c, engine, container)
 
 	go func() {
 		// stop server gracefully when ctrl-c, sigint or sigterm occurs

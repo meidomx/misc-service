@@ -1,5 +1,6 @@
 # misc-service
-Misc services
+
+Misc services for multiple purposes at the same time
 
 ## A. Services included
 
@@ -10,6 +11,8 @@ Misc services
   * [ ] RootDSE/Modify password
 * [x] Full text search service
   * [x] Insert or update/Delete/Simple search
+* [x] Small object storage
+  * [x] Insert/Delete/Get file content
 
 ## B. API
 
@@ -27,6 +30,12 @@ type CommonDocument struct {
   Body string `json:"body" form:"body"`
 }
 ```
+
+### B.3 Small object storage - `http api`
+
+  * Insert: `PUT /small_obj/:doc_id` - Request MIME: `multipart/form-data` with `file` field for object content
+  * Delete: `DELETE /small_obj/:doc_id`
+  * Get file content: `GET /small_obj/file_content/:doc_id` - Response MIME: `application/octet-stream`
 
 ## C. Dependency services
 
